@@ -1,20 +1,20 @@
-import { router } from "expo-router";
-import { useState } from "react";
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useState } from "react";
 import {
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-import { addPet } from "../../storage/pets";
+import { addPet, getPets } from "../../storage/pets";
 import { Pet } from "../../types/pet";
 
 type Option = {
@@ -114,7 +114,7 @@ const foodTypeOptions: Option[] = [
     value: "Ração urinária",
   },
   {
-    label: "Ração para diabéticos",
+    label: "Ração para diabéticos" ,
     value: "Ração para diabéticos",
   },
   {
@@ -153,6 +153,14 @@ const mealsOptions: Option[] = [
 ];
 
 export default function NewPetScreen() {
+
+  const params = useLocalSearchParams<{ id?: string }>();
+
+  const petId = Array.isArray(params.id)
+    ? params.id[0]
+    : params.id;
+
+  const isEditing = Boolean(petId);
   const [name, setName] = useState("");
 
   const [species, setSpecies] = useState("Gato");
@@ -188,6 +196,61 @@ export default function NewPetScreen() {
     useState<
       ((value: string) => void) | null
     >(null);
+
+      useEffect(() => {
+    if (!petId) {
+      return;
+    }
+
+    async function loadPetForEditing() {
+      try {
+        const pets = await getPets();
+
+        const pet = pets.find(
+          (item) => item.id === petId
+        );
+
+        if (!pet) {
+          Alert.alert(
+            "Erro",
+            "Pet não encontrado."
+          );
+
+          router.back();
+          return;
+        }
+
+        setName(pet.name);
+        setSpecies(pet.species);
+        setBreed(pet.breed ?? "");
+        setSex(pet.sex ?? "");
+        setColor(pet.color ?? "");
+        setAge(String(pet.age ?? ""));
+        setWeight(String(pet.weight ?? ""));
+        setFoodType(pet.food?.type ?? "");
+
+        setDailyAmount(
+          String(pet.food?.dailyAmount ?? "")
+        );
+
+        setMealsPerDay(
+          String(pet.food?.mealsPerDay ?? "")
+        );
+      } catch (error) {
+        console.error(
+          "Erro ao carregar pet para edição:",
+          error
+        );
+
+        Alert.alert(
+          "Erro",
+          "Não foi possível carregar os dados do pet."
+        );
+      }
+    }
+
+    loadPetForEditing();
+  }, [petId]);
 
   function openSelector(
     title: string,

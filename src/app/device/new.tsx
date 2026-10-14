@@ -1,625 +1,730 @@
-import {
-    useState,
-} from "react";
 
+import { router, useLocalSearchParams } from "expo-router";
+import { useEffect, useRef, useState } from "react";
 import {
-    Alert,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
-    router,
-    useLocalSearchParams,
-} from "expo-router";
-
-import {
-    SafeAreaView,
-} from "react-native-safe-area-context";
-
+  provisionBleDevice,
+  scanBleDevices,
+  type BlePetDevice,
+} from "../../services/deviceBle";
 import { addDevice } from "../../storage/devices";
 
-import {
-    DeviceType,
-} from "../../types/device";
+type DeviceType = "feeder" | "waterer";
 
 export default function NewDeviceScreen() {
-  const { petId } =
-    useLocalSearchParams<{
-      petId: string;
-    }>();
+  const params = useLocalSearchParams<{ petId?: string | string[] }>();
+  const petId = Array.isArray(params.petId)
+    ? params.petId[0]
+    : params.petId;
 
-  const [deviceType, setDeviceType] =
-    useState<DeviceType | null>(null);
+  const [devices, setDevices] = useState<BlePetDevice[]>([]);
+  const [device, setDevice] = useState<BlePetDevice | null>(null);
+  const [name, setName] = useState("");
+  const [type, setType] = useState<DeviceType>("feeder");
+  const [ssid, setSsid] = useState("");
+  const [password, setPassword] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [provisioning, setProvisioning] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [bleStatus, setBleStatus] = useState("");
+  const [scanMessage, setScanMessage] = useState(
+    "Toque no botão para procurar sua ESP32-CAM."
+  );
 
-  const [name, setName] =
-    useState("");
+  const stopScanRef = useRef<(() => void) | null>(null);
+  const scanTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
+  const foundDeviceRef = useRef(false);
 
-  const [saving, setSaving] =
-    useState(false);
+  useEffect(() => {
+    mountedRef.current = true;
 
-  async function handleAddDevice() {
-    if (!petId) {
-      Alert.alert(
-        "Erro",
-        "Não foi possível identificar o pet."
+    return () => {
+      mountedRef.current = false;
+      stopScanRef.current?.();
+      stopScanRef.current = null;
+
+      if (scanTimerRef.current) {
+        clearTimeout(scanTimerRef.current);
+        scanTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  async function handleDiscoverDevice() {
+    if (searching || provisioning) return;
+
+    setSearching(true);
+    setDevices([]);
+    setDevice(null);
+    foundDeviceRef.current = false;
+    setScanMessage("Procurando dispositivos Pet Control por Bluetooth...");
+
+    try {
+      const stop = await scanBleDevices(
+        (found) => {
+          if (!mountedRef.current) return;
+
+          foundDeviceRef.current = true;
+
+          setDevices((current) => {
+            if (current.some((item) => item.device.id === found.device.id)) {
+              return current;
+            }
+
+            return [...current, found];
+          });
+
+          setScanMessage("Selecione sua ESP32-CAM na lista.");
+        },
+        (error) => {
+          if (!mountedRef.current) return;
+
+          setScanMessage(error.message);
+          setSearching(false);
+
+          stopScanRef.current?.();
+          stopScanRef.current = null;
+        }
       );
 
+      if (!mountedRef.current) {
+        stop();
+        return;
+      }
+
+      stopScanRef.current = stop;
+
+      scanTimerRef.current = setTimeout(() => {
+        stopScanRef.current?.();
+        stopScanRef.current = null;
+        scanTimerRef.current = null;
+
+        if (!mountedRef.current) return;
+
+        setSearching(false);
+
+        if (!foundDeviceRef.current) {
+          setScanMessage(
+            "Busca concluída. Confira se a ESP32-CAM está ligada e no modo de configuração."
+          );
+        } else {
+          setScanMessage("Busca concluída. Selecione o dispositivo encontrado.");
+        }
+      }, 12000);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível iniciar a busca Bluetooth.";
+
+      if (mountedRef.current) {
+        setSearching(false);
+        setScanMessage(message);
+        Alert.alert("Bluetooth indisponível", message);
+      }
+    }
+  }
+
+  function handleSelectDevice(found: BlePetDevice) {
+    if (provisioning) return;
+
+    setDevice(found);
+
+    if (!name.trim()) {
+      setName(type === "feeder" ? "Comedouro" : "Bebedouro");
+    }
+
+    setBleStatus("");
+  }
+
+  function handleSelectType(selectedType: DeviceType) {
+    setType(selectedType);
+
+    if (!name.trim() || name === "Comedouro" || name === "Bebedouro") {
+      setName(selectedType === "feeder" ? "Comedouro" : "Bebedouro");
+    }
+  }
+
+  async function handleProvision() {
+    if (provisioning) return;
+
+    if (!device) {
+      Alert.alert(
+        "Dispositivo",
+        "Primeiro procure e selecione a ESP32-CAM."
+      );
       return;
     }
 
-    if (!deviceType) {
+    if (!petId) {
       Alert.alert(
-        "Tipo de dispositivo",
-        "Selecione o tipo de dispositivo."
+        "Erro",
+        "Não foi possível identificar o pet associado. Volte à tela do pet e tente novamente."
       );
-
       return;
     }
 
     if (!name.trim()) {
-      Alert.alert(
-        "Nome",
-        "Informe um nome para o dispositivo."
-      );
-
+      Alert.alert("Nome", "Digite um nome para o dispositivo.");
       return;
     }
 
+    if (!ssid.trim()) {
+      Alert.alert("Wi-Fi", "Digite o nome da rede Wi-Fi.");
+      return;
+    }
+
+    setProvisioning(true);
+    setBleStatus("Conectando à ESP32-CAM...");
+
+    stopScanRef.current?.();
+    stopScanRef.current = null;
+
+    if (scanTimerRef.current) {
+      clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+    }
+
+    setSearching(false);
+
     try {
-      setSaving(true);
+      const result = await provisionBleDevice(
+        device.device,
+        ssid.trim(),
+        password,
+        (status) => {
+          if (mountedRef.current) {
+            setBleStatus(status);
+          }
+        }
+      );
 
-      /*
-       * Criamos o dispositivo sem definir
-       * manualmente o identificador.
-       *
-       * A função addDevice() será responsável
-       * por gerar o identificador automaticamente.
-       */
-      const newDevice = {
-        id: Date.now().toString(),
+      const ip = result.ip ?? "";
 
+      await addDevice({
         petId,
-
         name: name.trim(),
+        type,
+        identifier: device.identifier,
+        ip,
+        status: ip ? "online" : "pending",
+        hardware: "ESP32-CAM",
+        rssi: device.rssi ?? undefined,
+      });
 
-        type: deviceType,
+      const message = ip
+        ? `${name.trim()} foi configurado com sucesso!\n\nIP identificado automaticamente: ${ip}`
+        : `${name.trim()} recebeu as configurações e confirmou o provisionamento, mas o IP não chegou pelo Bluetooth. Você poderá atualizar as informações depois.`;
 
-        identifier: "",
-
-        status: "pending" as const,
-
-        createdAt:
-          new Date().toISOString(),
-      };
-
-      await addDevice(newDevice);
-
-      Alert.alert(
-        "Dispositivo adicionado",
-        "O dispositivo foi vinculado ao pet com sucesso.",
-        [
-          {
-            text: "OK",
-            onPress: () =>
-              router.back(),
-          },
-        ]
-      );
+      Alert.alert("Wi-Fi configurado!", message, [
+        {
+          text: "Continuar",
+          onPress: () => router.replace(`/pet/${petId}`),
+        },
+      ]);
     } catch (error) {
-      console.error(
-        "Erro ao adicionar dispositivo:",
-        error
-      );
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Não foi possível configurar o dispositivo.";
 
-      Alert.alert(
-        "Erro",
-        "Não foi possível adicionar o dispositivo."
-      );
+      Alert.alert("Falha no provisionamento", message);
     } finally {
-      setSaving(false);
+      if (mountedRef.current) {
+        setProvisioning(false);
+        setBleStatus("");
+      }
     }
   }
 
+  
   return (
-    <SafeAreaView
-      style={styles.container}
-    >
+    <SafeAreaView style={styles.safeArea}>
       <ScrollView
-        contentContainerStyle={
-          styles.content
-        }
-        showsVerticalScrollIndicator={
-          false
-        }
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
       >
-        {/* Cabeçalho */}
-
-        <View style={styles.header}>
-          <Pressable
-            style={styles.backButton}
-            onPress={() =>
-              router.back()
-            }
-          >
-            <Text
-              style={styles.backIcon}
-            >
-              ‹
-            </Text>
-          </Pressable>
-
-          <Text style={styles.title}>
-            Adicionar dispositivo
-          </Text>
-
-          <View
-            style={styles.headerSpacer}
-          />
-        </View>
-
-        {/* Descrição */}
-
-        <Text
-          style={
-            styles.description
-          }
-        >
-          Escolha o tipo de dispositivo que
-          deseja vincular a este pet.
-        </Text>
-
-        {/* Tipo de dispositivo */}
-
-        <Text
-          style={styles.sectionTitle}
-        >
-          Tipo de dispositivo
-        </Text>
-
-        <View
-          style={styles.deviceOptions}
-        >
-          {/* Comedouro */}
-
-          <Pressable
-            style={[
-              styles.deviceOption,
-              deviceType ===
-                "feeder" &&
-                styles.deviceOptionSelected,
-            ]}
-            onPress={() =>
-              setDeviceType(
-                "feeder"
-              )
-            }
-          >
-            <View
-              style={[
-                styles.optionIcon,
-                deviceType ===
-                  "feeder" &&
-                  styles.optionIconSelected,
-              ]}
-            >
-              <Text
-                style={
-                  styles.optionEmoji
-                }
-              >
-                🍽️
-              </Text>
-            </View>
-
-            <View
-              style={
-                styles.optionInfo
-              }
-            >
-              <Text
-                style={
-                  styles.optionTitle
-                }
-              >
-                Comedouro
-              </Text>
-
-              <Text
-                style={
-                  styles.optionDescription
-                }
-              >
-                Controle automático de
-                alimentação.
-              </Text>
-            </View>
-
-            <View
-              style={[
-                styles.radio,
-                deviceType ===
-                  "feeder" &&
-                  styles.radioSelected,
-              ]}
-            >
-              {deviceType ===
-                "feeder" && (
-                <View
-                  style={
-                    styles.radioInner
-                  }
-                />
-              )}
-            </View>
-          </Pressable>
-
-          {/* Bebedouro */}
-
-          <Pressable
-            style={[
-              styles.deviceOption,
-              deviceType ===
-                "waterer" &&
-                styles.deviceOptionSelected,
-            ]}
-            onPress={() =>
-              setDeviceType(
-                "waterer"
-              )
-            }
-          >
-            <View
-              style={[
-                styles.optionIcon,
-                styles.waterIcon,
-                deviceType ===
-                  "waterer" &&
-                  styles.optionIconSelected,
-              ]}
-            >
-              <Text
-                style={
-                  styles.optionEmoji
-                }
-              >
-                💧
-              </Text>
-            </View>
-
-            <View
-              style={
-                styles.optionInfo
-              }
-            >
-              <Text
-                style={
-                  styles.optionTitle
-                }
-              >
-                Bebedouro
-              </Text>
-
-              <Text
-                style={
-                  styles.optionDescription
-                }
-              >
-                Monitoramento do nível e
-                consumo de água.
-              </Text>
-            </View>
-
-            <View
-              style={[
-                styles.radio,
-                deviceType ===
-                  "waterer" &&
-                  styles.radioSelected,
-              ]}
-            >
-              {deviceType ===
-                "waterer" && (
-                <View
-                  style={
-                    styles.radioInner
-                  }
-                />
-              )}
-            </View>
-          </Pressable>
-        </View>
-
-        {/* Nome */}
-
-        {deviceType && (
-          <View
-            style={styles.form}
-          >
-            <Text
-              style={
-                styles.sectionTitle
-              }
-            >
-              Informações do dispositivo
-            </Text>
-
-            <Text
-              style={styles.label}
-            >
-              Nome do dispositivo
-            </Text>
-
-            <TextInput
-              style={styles.input}
-              placeholder={
-                deviceType ===
-                "feeder"
-                  ? "Ex.: Comedouro da Luna"
-                  : "Ex.: Bebedouro da Luna"
-              }
-              placeholderTextColor="#999"
-              value={name}
-              onChangeText={
-                setName
-              }
-              maxLength={40}
-            />
-
-            <Text
-              style={
-                styles.helperText
-              }
-            >
-              O identificador do dispositivo
-              será criado automaticamente pelo
-              sistema.
-            </Text>
-          </View>
-        )}
-
-        {/* Botão */}
-
         <Pressable
-          style={({ pressed }) => [
-            styles.addButton,
-
-            (!deviceType ||
-              !name.trim()) &&
-              styles.addButtonDisabled,
-
-            pressed &&
-              styles.addButtonPressed,
-          ]}
-          onPress={
-            handleAddDevice
-          }
-          disabled={
-            saving ||
-            !deviceType ||
-            !name.trim()
-          }
+          onPress={() => router.back()}
+          disabled={provisioning}
+          style={styles.backButtonContainer}
         >
-          <Text
-            style={
-              styles.addButtonText
-            }
-          >
-            {saving
-              ? "Adicionando..."
-              : "Adicionar dispositivo"}
-          </Text>
+          <Text style={styles.backButton}>← Voltar</Text>
         </Pressable>
+
+        <Text style={styles.title}>Adicionar dispositivo</Text>
+
+        <Text style={styles.subtitle}>
+          Configure seu comedouro ou bebedouro Pet Control usando Bluetooth,
+          sem precisar conectar o celular ao Wi-Fi da ESP32-CAM.
+        </Text>
+
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>
+            1. Encontrar dispositivo
+          </Text>
+
+          <Text style={styles.description}>
+            Ligue a ESP32-CAM e deixe-a no modo de configuração Bluetooth.
+          </Text>
+
+          <Pressable
+            style={[
+              styles.primaryButton,
+              (searching || provisioning) && styles.disabledButton,
+            ]}
+            onPress={handleDiscoverDevice}
+            disabled={searching || provisioning}
+          >
+            {searching ? (
+              <View style={styles.loadingRow}>
+                <ActivityIndicator color="#ffffff" />
+                <Text style={styles.primaryButtonText}>
+                  Procurando...
+                </Text>
+              </View>
+            ) : (
+              <Text style={styles.primaryButtonText}>
+                Procurar via Bluetooth
+              </Text>
+            )}
+          </Pressable>
+
+          <Text style={styles.scanMessage}>{scanMessage}</Text>
+
+          {devices.map((found) => {
+            const selected = device?.device.id === found.device.id;
+
+            return (
+              <Pressable
+                key={found.device.id}
+                style={[
+                  styles.deviceOption,
+                  selected && styles.deviceOptionSelected,
+                ]}
+                onPress={() => handleSelectDevice(found)}
+                disabled={provisioning}
+              >
+                <Text style={styles.foundTitle}>
+                  {selected ? "✓ " : ""}
+                  {found.name}
+                </Text>
+
+                <Text style={styles.deviceInfo}>
+                  Sinal Bluetooth: {found.rssi ?? "—"} dBm
+                </Text>
+
+                <Text style={styles.deviceInfo}>
+                  Toque para selecionar
+                </Text>
+              </Pressable>
+            );
+          })}
+
+          {device && (
+            <View style={styles.successBox}>
+              <Text style={styles.foundTitle}>
+                Dispositivo selecionado
+              </Text>
+
+              <Text style={styles.identifier}>
+                {device.identifier}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {device && (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>
+                2. Identificar dispositivo
+              </Text>
+
+              <Text style={styles.label}>Nome</Text>
+
+              <TextInput
+                style={styles.input}
+                value={name}
+                onChangeText={setName}
+                placeholder={
+                  type === "feeder"
+                    ? "Ex.: Comedouro da Luna"
+                    : "Ex.: Bebedouro da sala"
+                }
+                placeholderTextColor="#999999"
+                editable={!provisioning}
+              />
+
+              <Text style={styles.label}>Tipo</Text>
+
+              <View style={styles.typeRow}>
+                <Pressable
+                  style={[
+                    styles.typeButton,
+                    type === "feeder" && styles.typeButtonSelected,
+                  ]}
+                  onPress={() => handleSelectType("feeder")}
+                  disabled={provisioning}
+                >
+                  <Text
+                    style={[
+                      styles.typeButtonText,
+                      type === "feeder" &&
+                        styles.typeButtonTextSelected,
+                    ]}
+                  >
+                    🍽️ Comedouro
+                  </Text>
+                </Pressable>
+
+                <Pressable
+                  style={[
+                    styles.typeButton,
+                    type === "waterer" && styles.typeButtonSelected,
+                  ]}
+                  onPress={() => handleSelectType("waterer")}
+                  disabled={provisioning}
+                >
+                  <Text
+                    style={[
+                      styles.typeButtonText,
+                      type === "waterer" &&
+                        styles.typeButtonTextSelected,
+                    ]}
+                  >
+                    💧 Bebedouro
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>
+                3. Wi-Fi da residência
+              </Text>
+
+              <Text style={styles.description}>
+                Informe a rede Wi-Fi de 2,4 GHz à qual a ESP32-CAM deverá se
+                conectar.
+              </Text>
+
+              <Text style={styles.label}>Nome da rede (SSID)</Text>
+
+              <TextInput
+                style={styles.input}
+                value={ssid}
+                onChangeText={setSsid}
+                placeholder="Nome da rede Wi-Fi"
+                placeholderTextColor="#999999"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!provisioning}
+              />
+
+              <Text style={styles.label}>Senha</Text>
+
+              <View style={styles.passwordContainer}>
+                <TextInput
+                  style={styles.passwordInput}
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder="Senha do Wi-Fi"
+                  placeholderTextColor="#999999"
+                  secureTextEntry={!showPassword}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  editable={!provisioning}
+                />
+
+                <Pressable
+                  style={styles.passwordButton}
+                  onPress={() => setShowPassword((value) => !value)}
+                  disabled={provisioning}
+                >
+                  <Text style={styles.passwordButtonText}>
+                    {showPassword ? "Ocultar" : "Mostrar"}
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.warningBox}>
+                <Text style={styles.warningText}>
+                  O celular continua conectado à sua rede normal. As
+                  credenciais serão enviadas diretamente à ESP32-CAM pelo BLE.
+                </Text>
+              </View>
+
+              {provisioning && (
+                <View style={styles.progressBox}>
+                  <ActivityIndicator color="#2563eb" />
+
+                  <Text style={styles.progressText}>
+                    {bleStatus || "Configurando dispositivo..."}
+                  </Text>
+                </View>
+              )}
+
+              <Pressable
+                style={[
+                  styles.provisionButton,
+                  provisioning && styles.disabledButton,
+                ]}
+                onPress={handleProvision}
+                disabled={provisioning}
+              >
+                {provisioning ? (
+                  <ActivityIndicator color="#ffffff" />
+                ) : (
+                  <Text style={styles.provisionButtonText}>
+                    Configurar dispositivo
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: "#F7F7F5",
+    backgroundColor: "#f5f7fb",
   },
-
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
+  container: {
+    padding: 20,
     paddingBottom: 40,
   },
-
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent:
-      "space-between",
-    marginBottom: 20,
+  backButtonContainer: {
+    alignSelf: "flex-start",
+    marginBottom: 18,
+    paddingVertical: 6,
   },
-
   backButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor:
-      "#FFFFFF",
-    justifyContent: "center",
-    alignItems: "center",
+    color: "#2563eb",
+    fontSize: 16,
+    fontWeight: "600",
   },
-
-  backIcon: {
-    fontSize: 32,
-    color: "#333",
-    marginTop: -3,
-  },
-
   title: {
-    fontSize: 19,
+    color: "#172033",
+    fontSize: 28,
     fontWeight: "700",
-    color: "#222",
+    marginBottom: 8,
   },
-
-  headerSpacer: {
-    width: 42,
+  subtitle: {
+    color: "#64748b",
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 22,
   },
-
-  description: {
-    fontSize: 14,
-    color: "#777",
-    lineHeight: 21,
-    marginBottom: 28,
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
   },
-
   sectionTitle: {
+    color: "#172033",
     fontSize: 18,
     fontWeight: "700",
-    color: "#222",
-    marginBottom: 12,
+    marginBottom: 10,
   },
-
-  deviceOptions: {
-    gap: 12,
+  description: {
+    color: "#64748b",
+    fontSize: 14,
+    lineHeight: 21,
+    marginBottom: 14,
   },
-
-  deviceOption: {
-    backgroundColor:
-      "#FFFFFF",
-    borderRadius: 22,
-    padding: 16,
+  primaryButton: {
+    backgroundColor: "#2563eb",
+    borderRadius: 10,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  primaryButtonText: {
+    color: "#ffffff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  disabledButton: {
+    opacity: 0.6,
+  },
+  loadingRow: {
     flexDirection: "row",
     alignItems: "center",
-    borderWidth: 1.5,
-    borderColor:
-      "transparent",
+    justifyContent: "center",
+    gap: 10,
   },
-
-  deviceOptionSelected: {
-    borderColor: "#555",
-  },
-
-  optionIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor:
-      "#F0ECE5",
-    justifyContent:
-      "center",
-    alignItems: "center",
-    marginRight: 13,
-  },
-
-  waterIcon: {
-    backgroundColor:
-      "#E9F1F0",
-  },
-
-  optionIconSelected: {
-    backgroundColor:
-      "#E5E0D7",
-  },
-
-  optionEmoji: {
-    fontSize: 27,
-  },
-
-  optionInfo: {
-    flex: 1,
-  },
-
-  optionTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#222",
+  scanMessage: {
+    color: "#475569",
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 12,
     marginBottom: 4,
   },
-
-  optionDescription: {
-    fontSize: 11,
-    color: "#888",
-    lineHeight: 16,
+  deviceOption: {
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    padding: 13,
+    marginTop: 10,
+    backgroundColor: "#ffffff",
   },
-
-  radio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 1.5,
-    borderColor:
-      "#C8C5BF",
-    justifyContent:
-      "center",
-    alignItems: "center",
-    marginLeft: 8,
+  deviceOptionSelected: {
+    borderColor: "#2563eb",
+    backgroundColor: "#eff6ff",
   },
-
-  radioSelected: {
-    borderColor: "#333",
+  foundTitle: {
+    color: "#172033",
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: 4,
   },
-
-  radioInner: {
-    width: 11,
-    height: 11,
-    borderRadius: 6,
-    backgroundColor:
-      "#333",
-  },
-
-  form: {
-    marginTop: 30,
-  },
-
-  label: {
+  deviceInfo: {
+    color: "#64748b",
     fontSize: 13,
+    marginTop: 3,
+  },
+  successBox: {
+    marginTop: 14,
+    padding: 12,
+    borderRadius: 10,
+    backgroundColor: "#ecfdf5",
+    borderWidth: 1,
+    borderColor: "#a7f3d0",
+  },
+  identifier: {
+    color: "#047857",
+    fontSize: 13,
+    marginTop: 4,
+  },
+  label: {
+    color: "#334155",
+    fontSize: 14,
     fontWeight: "600",
-    color: "#444",
+    marginTop: 12,
     marginBottom: 7,
   },
-
   input: {
-    height: 54,
-    borderRadius: 16,
-    backgroundColor:
-      "#FFFFFF",
-    paddingHorizontal: 16,
-    fontSize: 14,
-    color: "#222",
+    backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor:
-      "#E5E2DC",
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: "#172033",
   },
-
-  helperText: {
-    fontSize: 11,
-    color: "#999",
-    lineHeight: 17,
-    marginTop: 8,
+  typeRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 2,
   },
-
-  addButton: {
-    height: 58,
-    borderRadius: 18,
-    backgroundColor:
-      "#2F2F2F",
-    justifyContent:
-      "center",
+  typeButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 6,
     alignItems: "center",
-    marginTop: 32,
+    backgroundColor: "#ffffff",
   },
-
-  addButtonDisabled: {
-    backgroundColor:
-      "#C8C5BF",
+  typeButtonSelected: {
+    backgroundColor: "#eff6ff",
+    borderColor: "#2563eb",
   },
-
-  addButtonPressed: {
-    opacity: 0.8,
+  typeButtonText: {
+    color: "#475569",
+    fontSize: 13,
+    fontWeight: "600",
   },
-
-  addButtonText: {
-    color: "#FFFFFF",
+  typeButtonTextSelected: {
+    color: "#1d4ed8",
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
+    borderRadius: 10,
+    backgroundColor: "#ffffff",
+  },
+  passwordInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    color: "#172033",
+    fontSize: 15,
+  },
+  passwordButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  passwordButtonText: {
+    color: "#2563eb",
+    fontWeight: "700",
+    fontSize: 13,
+  },
+  warningBox: {
+    backgroundColor: "#eff6ff",
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 16,
+  },
+  warningText: {
+    color: "#1e40af",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  progressBox: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    padding: 12,
+    marginTop: 16,
+    borderRadius: 10,
+    backgroundColor: "#f1f5f9",
+  },
+  progressText: {
+    flex: 1,
+    color: "#334155",
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  provisionButton: {
+    backgroundColor: "#16a34a",
+    borderRadius: 10,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginTop: 18,
+  },
+  provisionButtonText: {
+    color: "#ffffff",
     fontSize: 15,
     fontWeight: "700",
   },

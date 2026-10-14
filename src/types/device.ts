@@ -1,6 +1,4 @@
-export type DeviceType =
-  | "feeder"
-  | "waterer";
+export type DeviceType = "feeder" | "waterer";
 
 export type DeviceStatus =
   | "online"
@@ -8,43 +6,24 @@ export type DeviceStatus =
   | "pending";
 
 export type Device = {
-  /**
-   * ID interno utilizado pelo aplicativo.
-   */
   id: string;
-
-  /**
-   * ID do pet ao qual o dispositivo
-   * está vinculado.
-   */
   petId: string;
-
-  /**
-   * Nome dado pelo usuário.
-   */
   name: string;
-
-  /**
-   * Tipo do dispositivo.
-   */
   type: DeviceType;
 
-  /**
-   * Identificador gerado automaticamente
-   * pelo sistema.
-   *
-   * Futuramente poderá ser associado ao
-   * identificador físico do ESP32.
-   */
+  // Identificador físico do ESP32
   identifier: string;
 
-  /**
-   * Estado atual da conexão.
-   */
+  // IP utilizado quando o dispositivo
+  // está conectado à rede da residência
+  ip: string;
+
   status: DeviceStatus;
 
-  /**
-   * Data de criação do dispositivo.
-   */
+  // Informações opcionais da última comunicação
+  firmware?: string;
+  hardware?: string;
+  rssi?: number;
+
   createdAt: string;
 };

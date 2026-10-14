@@ -1,5 +1,5 @@
-import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   Pressable,
   ScrollView,
@@ -10,27 +10,38 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { initialPets } from "../data/pets";
-import { getPets, savePets } from "../storage/pets";
+import {
+  getPets,
+  hasSavedPetsList,
+  savePets,
+} from "../storage/pets";
 import { Pet } from "../types/pet";
 
 export default function HomeScreen() {
   const [pets, setPets] = useState<Pet[]>([]);
 
-  useEffect(() => {
-    loadPets();
+  const loadPets = useCallback(async () => {
+    try {
+      const hasSavedList = await hasSavedPetsList();
+
+      if (!hasSavedList) {
+        await savePets(initialPets);
+        setPets(initialPets);
+        return;
+      }
+
+      const storedPets = await getPets();
+      setPets(storedPets);
+    } catch (error) {
+      console.error("Erro ao carregar lista de pets:", error);
+    }
   }, []);
 
-  async function loadPets() {
-    const storedPets = await getPets();
-
-    if (storedPets.length === 0) {
-      await savePets(initialPets);
-      setPets(initialPets);
-      return;
-    }
-
-    setPets(storedPets);
-  }
+  useFocusEffect(
+    useCallback(() => {
+      loadPets();
+    }, [loadPets])
+  );
 
   return (
     <SafeAreaView style={styles.container}>

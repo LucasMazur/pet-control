@@ -1,3 +1,4 @@
+
 export type DeviceApiStatus =
   | "provisioning"
   | "online"
@@ -14,7 +15,10 @@ export type DiscoveredDevice = {
 export type DeviceStatus = {
   online: boolean;
   provisioning: boolean;
-  wifiStatus: number;
+  wifiMode: "AP" | "AP+STA" | "STA" | string;
+  ip: string;
+  clients: number;
+  uptime: number;
   rssi: number;
   freeHeap: number;
 };
@@ -28,12 +32,7 @@ export type ProvisionResult = {
 };
 
 const DEFAULT_DEVICE_IP = "192.168.4.1";
-
 const REQUEST_TIMEOUT = 5000;
-
-// ============================================================
-// FETCH COM TIMEOUT
-// ============================================================
 
 async function fetchWithTimeout(
   url: string,
@@ -42,40 +41,31 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
 
-  const timeoutId = setTimeout(() => {
-    controller.abort();
-  }, timeout);
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    timeout
+  );
 
   try {
-    const response = await fetch(url, {
+    return await fetch(url, {
       ...options,
       signal: controller.signal,
     });
-
-    return response;
   } finally {
     clearTimeout(timeoutId);
   }
 }
-
-// ============================================================
-// NORMALIZA IP
-// ============================================================
 
 function normalizeBaseUrl(
   ip: string = DEFAULT_DEVICE_IP
 ): string {
   const cleanIp = ip
     .trim()
-    .replace(/^https?:\/\//, "")
+    .replace(/^https?:\/\//i, "")
     .replace(/\/+$/, "");
 
   return `http://${cleanIp}`;
 }
-
-// ============================================================
-// DESCOBRIR DISPOSITIVO
-// ============================================================
 
 export async function discoverDevice(
   ip = DEFAULT_DEVICE_IP
@@ -86,9 +76,7 @@ export async function discoverDevice(
     `${baseUrl}/api/device`,
     {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     }
   );
 
@@ -103,19 +91,15 @@ export async function discoverDevice(
 
   if (!data.identifier) {
     throw new Error(
-      "Resposta do dispositivo não contém identificador."
+      "A resposta do dispositivo não contém identificador."
     );
   }
 
   return data;
 }
 
-// ============================================================
-// STATUS
-// ============================================================
-
 export async function getDeviceStatus(
-  ip = DEFAULT_DEVICE_IP
+  ip: string
 ): Promise<DeviceStatus> {
   const baseUrl = normalizeBaseUrl(ip);
 
@@ -123,9 +107,7 @@ export async function getDeviceStatus(
     `${baseUrl}/api/status`,
     {
       method: "GET",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     }
   );
 
@@ -138,17 +120,12 @@ export async function getDeviceStatus(
   return (await response.json()) as DeviceStatus;
 }
 
-// ============================================================
-// PROVISIONAMENTO
-// ============================================================
-
 export async function provisionDevice(
   ssid: string,
   password: string,
   ip = DEFAULT_DEVICE_IP
 ): Promise<ProvisionResult> {
   const baseUrl = normalizeBaseUrl(ip);
-
   const body = new URLSearchParams();
 
   body.append("ssid", ssid);
@@ -168,8 +145,15 @@ export async function provisionDevice(
     20000
   );
 
-  const data =
-    (await response.json()) as ProvisionResult;
+  let data: ProvisionResult;
+
+  try {
+    data = (await response.json()) as ProvisionResult;
+  } catch {
+    throw new Error(
+      "O dispositivo não retornou uma resposta válida."
+    );
+  }
 
   if (!response.ok) {
     throw new Error(
@@ -181,10 +165,6 @@ export async function provisionDevice(
   return data;
 }
 
-// ============================================================
-// RESET
-// ============================================================
-
 export async function resetDevice(
   ip = DEFAULT_DEVICE_IP
 ): Promise<void> {
@@ -194,9 +174,7 @@ export async function resetDevice(
     `${baseUrl}/api/reset`,
     {
       method: "POST",
-      headers: {
-        Accept: "application/json",
-      },
+      headers: { Accept: "application/json" },
     }
   );
 

@@ -1,211 +1,197 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-import {
+import type {
     Device,
+    DeviceStatus,
     DeviceType,
 } from "../types/device";
 
 const DEVICES_STORAGE_KEY =
   "@pet_control:devices";
 
-/**
- * Gera uma sequência aleatória de caracteres
- * utilizada para criar identificadores únicos.
- */
-function generateRandomCode(
-  length: number = 8
-): string {
-  const characters =
-    "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// ============================================================
+// BUSCAR TODOS
+// ============================================================
 
-  let result = "";
-
-  for (let i = 0; i < length; i++) {
-    const randomIndex = Math.floor(
-      Math.random() * characters.length
+export async function getDevices(): Promise<Device[]> {
+  const stored =
+    await AsyncStorage.getItem(
+      DEVICES_STORAGE_KEY
     );
 
-    result += characters[randomIndex];
+  if (!stored) {
+    return [];
   }
 
-  return result;
-}
-
-/**
- * Gera automaticamente o identificador
- * de um dispositivo.
- *
- * Exemplos:
- *
- * DEV-FDR-A7K92XPQ
- * DEV-WTR-M4P81QXZ
- */
-export function generateDeviceIdentifier(
-  type: DeviceType
-): string {
-  const prefix =
-    type === "feeder"
-      ? "DEV-FDR"
-      : "DEV-WTR";
-
-  return `${prefix}-${generateRandomCode(8)}`;
-}
-
-/**
- * Busca todos os dispositivos cadastrados.
- */
-export async function getDevices(): Promise<
-  Device[]
-> {
   try {
-    const data =
-      await AsyncStorage.getItem(
-        DEVICES_STORAGE_KEY
-      );
-
-    if (!data) {
-      return [];
-    }
-
-    return JSON.parse(data);
-  } catch (error) {
-    console.error(
-      "Erro ao carregar dispositivos:",
-      error
-    );
-
+    return JSON.parse(stored) as Device[];
+  } catch {
     return [];
   }
 }
 
-/**
- * Salva a lista completa de dispositivos.
- */
+// ============================================================
+// SALVAR TODOS
+// ============================================================
+
 export async function saveDevices(
   devices: Device[]
 ): Promise<void> {
-  try {
-    await AsyncStorage.setItem(
-      DEVICES_STORAGE_KEY,
-      JSON.stringify(devices)
-    );
-  } catch (error) {
-    console.error(
-      "Erro ao salvar dispositivos:",
-      error
-    );
-  }
+  await AsyncStorage.setItem(
+    DEVICES_STORAGE_KEY,
+    JSON.stringify(devices)
+  );
 }
 
-/**
- * Adiciona um novo dispositivo.
- *
- * Caso o identificador não tenha sido informado,
- * o sistema gera automaticamente.
- */
+// ============================================================
+// ADICIONAR
+// ============================================================
+
 export async function addDevice(
-  device: Device
-): Promise<void> {
-  const devices = await getDevices();
+  data: {
+    petId: string;
+    name: string;
+    type: DeviceType;
+    identifier: string;
+    ip: string;
+    status?: DeviceStatus;
+    firmware?: string;
+    hardware?: string;
+    rssi?: number;
+  }
+): Promise<Device> {
+  const devices =
+    await getDevices();
 
-  let identifier = device.identifier;
+  const existing =
+    devices.find(
+      (device) =>
+        device.identifier ===
+        data.identifier
+    );
 
-  /*
-   * Se não houver identificador,
-   * gera automaticamente.
-   */
-  if (!identifier) {
-    identifier =
-      generateDeviceIdentifier(
-        device.type
-      );
+  if (existing) {
+    throw new Error(
+      "Este dispositivo já está cadastrado."
+    );
   }
 
-  /*
-   * Garante que o identificador gerado
-   * não seja igual ao de outro dispositivo.
-   */
-  while (
-    devices.some(
-      (item) =>
-        item.identifier === identifier
-    )
-  ) {
-    identifier =
-      generateDeviceIdentifier(
-        device.type
-      );
-  }
+  const device: Device = {
+    id: `device-${Date.now()}`,
 
-  const deviceToSave: Device = {
-    ...device,
-    identifier,
+    petId: data.petId,
+
+    name: data.name,
+
+    type: data.type,
+
+    identifier: data.identifier,
+
+    ip: data.ip,
+
+    status:
+      data.status ?? "pending",
+
+    firmware: data.firmware,
+
+    hardware: data.hardware,
+
+    rssi: data.rssi,
+
+    createdAt:
+      new Date().toISOString(),
   };
 
-  devices.push(deviceToSave);
+  devices.push(device);
 
   await saveDevices(devices);
+
+  return device;
 }
 
-/**
- * Atualiza um dispositivo existente.
- */
+// ============================================================
+// ATUALIZAR
+// ============================================================
+
 export async function updateDevice(
-  updatedDevice: Device
-): Promise<void> {
-  const devices = await getDevices();
+  id: string,
+  updates: Partial<Device>
+): Promise<Device | null> {
+  const devices =
+    await getDevices();
 
-  const updatedDevices = devices.map(
-    (device) =>
-      device.id === updatedDevice.id
-        ? updatedDevice
-        : device
-  );
+  const index =
+    devices.findIndex(
+      (device) =>
+        device.id === id
+    );
 
-  await saveDevices(updatedDevices);
+  if (index === -1) {
+    return null;
+  }
+
+  const updatedDevice: Device = {
+    ...devices[index],
+    ...updates,
+  };
+
+  devices[index] =
+    updatedDevice;
+
+  await saveDevices(devices);
+
+  return updatedDevice;
 }
 
-/**
- * Remove um dispositivo pelo ID.
- */
+// ============================================================
+// EXCLUIR
+// ============================================================
+
 export async function deleteDevice(
   id: string
 ): Promise<void> {
-  const devices = await getDevices();
+  const devices =
+    await getDevices();
 
-  const updatedDevices =
+  const filtered =
     devices.filter(
-      (device) => device.id !== id
+      (device) =>
+        device.id !== id
     );
 
-  await saveDevices(updatedDevices);
+  await saveDevices(filtered);
 }
 
-/**
- * Busca todos os dispositivos pertencentes
- * a um determinado pet.
- */
-export async function getDevicesByPetId(
-  petId: string
-): Promise<Device[]> {
-  const devices = await getDevices();
+// ============================================================
+// BUSCAR POR ID
+// ============================================================
 
-  return devices.filter(
-    (device) => device.petId === petId
-  );
-}
-
-/**
- * Busca um dispositivo específico pelo ID.
- */
 export async function getDeviceById(
   id: string
 ): Promise<Device | null> {
-  const devices = await getDevices();
+  const devices =
+    await getDevices();
 
-  const device = devices.find(
-    (item) => item.id === id
+  return (
+    devices.find(
+      (device) =>
+        device.id === id
+    ) ?? null
   );
+}
 
-  return device || null;
+// ============================================================
+// BUSCAR DISPOSITIVOS DO GATO
+// ============================================================
+
+export async function getDevicesByPetId(
+  petId: string
+): Promise<Device[]> {
+  const devices =
+    await getDevices();
+
+  return devices.filter(
+    (device) =>
+      device.petId === petId
+  );
 }

@@ -1,118 +1,259 @@
-import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useState,
+} from "react";
+
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
-import { getDevicesByPetId } from "../../storage/devices";
-import { getPets } from "../../storage/pets";
+import {
+  SafeAreaView,
+} from "react-native-safe-area-context";
 
-import { Device } from "../../types/device";
-import { Pet } from "../../types/pet";
+import {
+  router,
+  useFocusEffect,
+  useLocalSearchParams,
+} from "expo-router";
+
+import {
+  deletePet,
+  getPets,
+} from "../../storage/pets";
+
+import {
+  getDevicesByPetId,
+} from "../../storage/devices";
+
+import type {
+  Pet,
+} from "../../types/pet";
+
+import type {
+  Device,
+} from "../../types/device";
 
 export default function PetDetailsScreen() {
-  const { id } = useLocalSearchParams<{
-    id: string;
-  }>();
+  const params =
+    useLocalSearchParams<{
+      id?: string;
+    }>();
 
-  const [pet, setPet] = useState<Pet | null>(null);
+  const petId =
+    Array.isArray(params.id)
+      ? params.id[0]
+      : params.id;
 
-  const [devices, setDevices] = useState<Device[]>(
-    []
-  );
+  const [pet, setPet] =
+    useState<Pet | null>(null);
 
-  const [loading, setLoading] = useState(true);
+  const [devices, setDevices] =
+    useState<Device[]>([]);
 
-  useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
+  const [loading, setLoading] =
+    useState(true);
 
-        // Carrega os pets salvos no AsyncStorage
-        const storedPets = await getPets();
+  // ==========================================================
+  // CARREGAR DADOS
+  // ==========================================================
 
-        // Procura o pet pelo ID recebido pela rota
-        const foundPet = storedPets.find(
-          (item) => item.id === id
-        );
+  const loadData =
+    useCallback(
+      async () => {
+        try {
+          setLoading(true);
 
-        if (!foundPet) {
-          console.error(
-            "Pet não encontrado. ID:",
-            id
+          if (!petId) {
+            return;
+          }
+
+          const pets =
+            await getPets();
+
+          const foundPet =
+            pets.find(
+              (item) =>
+                item.id === petId
+            );
+
+          setPet(
+            foundPet ?? null
           );
 
-          setPet(null);
-          setDevices([]);
+          const petDevices =
+            await getDevicesByPetId(
+              petId
+            );
 
-          return;
+          setDevices(
+            petDevices
+          );
+        } catch (error) {
+          console.log(
+            "Erro ao carregar pet:",
+            error
+          );
+        } finally {
+          setLoading(false);
         }
+      },
+      [petId]
+    );
 
-        setPet(foundPet);
-
-        // Carrega os dispositivos relacionados
-        // ao pet
-        const petDevices =
-          await getDevicesByPetId(foundPet.id);
-
-        setDevices(petDevices);
-      } catch (error) {
-        console.error(
-          "Erro ao carregar dados do pet:",
-          error
-        );
-      } finally {
-        setLoading(false);
-      }
+    async function handleDeletePet() {
+    if (!pet) {
+      return;
     }
 
-    loadData();
-  }, [id]);
+    Alert.alert(
+      "Excluir pet",
+      `Tem certeza de que deseja excluir ${pet.name}? Essa ação não pode ser desfeita.`,
+      [
+        {
+          text: "Cancelar",
+          style: "cancel",
+        },
+        {
+          text: "Excluir",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await deletePet(pet.id);
 
-  /*
-   * Tela de carregamento
-   */
+              Alert.alert(
+                "Pet excluído",
+                `${pet.name} foi excluído com sucesso.`,
+                [
+                  {
+                    text: "Continuar",
+                    onPress: () => router.replace("/"),
+                  },
+                ]
+              );
+            } catch (error) {
+              console.error("Erro ao excluir pet:", error);
+
+              Alert.alert(
+                "Erro",
+                "Não foi possível excluir o pet. Tente novamente."
+              );
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  // ==========================================================
+  // RECARREGAR SEMPRE QUE A TELA RECEBER FOCO
+  // ==========================================================
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  // ==========================================================
+  // ABRIR DISPOSITIVO
+  // ==========================================================
+
+  function handleDevicePress(
+    device: Device
+  ) {
+    console.log(
+      "Dispositivo selecionado:",
+      device.id
+    );
+
+    router.push({
+      pathname:
+        "/device/[id]",
+      params: {
+        id: device.id,
+      },
+    });
+  }
+
+  // ==========================================================
+  // ADICIONAR DISPOSITIVO
+  // ==========================================================
+
+  function handleAddDevice() {
+    if (!petId) {
+      Alert.alert(
+        "Erro",
+        "Não foi possível identificar o gato."
+      );
+
+      return;
+    }
+
+    router.push({
+      pathname:
+        "/device/new",
+      params: {
+        petId,
+      },
+    });
+  }
+
+  // ==========================================================
+  // LOADING
+  // ==========================================================
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingScreen}>
-          <ActivityIndicator size="large" />
-
-          <Text style={styles.loadingScreenText}>
-            Carregando informações...
-          </Text>
+      <SafeAreaView
+        style={styles.safeArea}
+      >
+        <View
+          style={styles.center}
+        >
+          <ActivityIndicator
+            size="large"
+          />
         </View>
       </SafeAreaView>
     );
   }
 
-  /*
-   * Caso o pet não exista
-   */
+  // ==========================================================
+  // PET NÃO ENCONTRADO
+  // ==========================================================
+
   if (!pet) {
     return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorTitle}>
-            Pet não encontrado
-          </Text>
-
-          <Text style={styles.errorText}>
-            Não foi possível encontrar esse pet
-            nos dados salvos.
+      <SafeAreaView
+        style={styles.safeArea}
+      >
+        <View
+          style={styles.center}
+        >
+          <Text
+            style={styles.errorTitle}
+          >
+            Gato não encontrado
           </Text>
 
           <Pressable
-            style={styles.backButton}
-            onPress={() => router.back()}
+            style={styles.button}
+            onPress={() =>
+              router.back()
+            }
           >
-            <Text style={styles.backButtonText}>
+            <Text
+              style={
+                styles.buttonText
+              }
+            >
               Voltar
             </Text>
           </Pressable>
@@ -121,344 +262,329 @@ export default function PetDetailsScreen() {
     );
   }
 
-  /*
-   * Ícone do dispositivo
-   */
-  function getDeviceIcon(
-    type: Device["type"]
-  ) {
-    if (type === "feeder") {
-      return "🍽️";
-    }
-
-    if (type === "waterer") {
-      return "💧";
-    }
-
-    return "📱";
-  }
-
-  /*
-   * Nome do tipo de dispositivo
-   */
-  function getDeviceTypeName(
-    type: Device["type"]
-  ) {
-    if (type === "feeder") {
-      return "Comedouro";
-    }
-
-    if (type === "waterer") {
-      return "Bebedouro";
-    }
-
-    return "Dispositivo";
-  }
-
-  /*
-   * Texto do status
-   */
-  function getStatusText(
-    status: Device["status"]
-  ) {
-    if (status === "online") {
-      return "Online";
-    }
-
-    if (status === "offline") {
-      return "Offline";
-    }
-
-    return "Aguardando conexão";
-  }
-
-  /*
-   * Estilo do status
-   */
-  function getStatusStyle(
-    status: Device["status"]
-  ) {
-    if (status === "online") {
-      return styles.statusOnline;
-    }
-
-    if (status === "offline") {
-      return styles.statusOffline;
-    }
-
-    return styles.statusPending;
-  }
+  // ==========================================================
+  // TELA
+  // ==========================================================
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView
+      style={styles.safeArea}
+    >
       <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
+        contentContainerStyle={
+          styles.container
+        }
       >
-        {/* Cabeçalho */}
-
-        <View style={styles.header}>
-          <Pressable
-            style={styles.backButtonCircle}
-            onPress={() => router.back()}
+        <Pressable
+          onPress={() =>
+            router.back()
+          }
+        >
+          <Text
+            style={styles.backText}
           >
-            <Text style={styles.backIcon}>
-              ‹
-            </Text>
-          </Pressable>
-
-          <Text style={styles.headerTitle}>
-            {pet.name}
+            ← Voltar
           </Text>
+        </Pressable>
 
-          <View style={styles.headerSpacer} />
-        </View>
+        {/* ================================================== */}
+        {/* CABEÇALHO DO PET */}
+        {/* ================================================== */}
 
-        {/* Informações principais do pet */}
-
-        <View style={styles.petHeader}>
-          <View style={styles.petAvatar}>
-            <Text style={styles.petEmoji}>
+        <View
+          style={styles.petHeader}
+        >
+          <View
+            style={styles.petAvatar}
+          >
+            <Text
+              style={
+                styles.petAvatarText
+              }
+            >
               🐱
             </Text>
           </View>
 
-          <View style={styles.petInfo}>
-            <Text style={styles.petName}>
+          <View
+            style={styles.petHeaderInfo}
+          >
+            <Text
+              style={styles.petName}
+            >
               {pet.name}
             </Text>
 
-            <Text style={styles.petDetails}>
-              {pet.age} anos •{" "}
-              {pet.weight.toFixed(1)} kg
-            </Text>
+            {pet.breed && (
+              <Text
+                style={
+                  styles.petBreed
+                }
+              >
+                {pet.breed}
+              </Text>
+            )}
 
-            <Text style={styles.petBreed}>
-              {pet.breed ||
-                "Raça não informada"}
-            </Text>
+            {pet.weight && (
+              <Text
+                style={
+                  styles.petWeight
+                }
+              >
+                {pet.weight} kg
+              </Text>
+            )}
           </View>
         </View>
 
-        {/* Dispositivos */}
+        {/* ================================================== */}
+        {/* INFORMAÇÕES */}
+        {/* ================================================== */}
 
-        <View style={styles.sectionHeader}>
-          <View>
-            <Text style={styles.sectionTitle}>
-              Dispositivos
-            </Text>
+        <View style={styles.card}>
+          <Text
+            style={styles.sectionTitle}
+          >
+            Informações
+          </Text>
 
-            <Text style={styles.sectionSubtitle}>
-              Equipamentos vinculados a{" "}
-              {pet.name}
-            </Text>
-          </View>
-        </View>
+          <InfoRow
+            label="Nome"
+            value={pet.name}
+          />
 
-        {/* Carregando dispositivos */}
-
-        {loading && (
-          <View style={styles.loadingContainer}>
-            <ActivityIndicator size="small" />
-
-            <Text style={styles.loadingText}>
-              Carregando dispositivos...
-            </Text>
-          </View>
-        )}
-
-        {/* Lista de dispositivos */}
-
-        {!loading &&
-          devices.length > 0 && (
-            <View style={styles.deviceList}>
-              {devices.map((device) => (
-                <Pressable
-                  key={device.id}
-                  style={({ pressed }) => [
-                    styles.deviceCard,
-                    pressed &&
-                      styles.deviceCardPressed,
-                  ]}
-                  onPress={() => {
-                    console.log(
-                      "Dispositivo selecionado:",
-                      device.id
-                    );
-                  }}
-                >
-                  <View style={styles.deviceIcon}>
-                    <Text style={styles.deviceEmoji}>
-                      {getDeviceIcon(
-                        device.type
-                      )}
-                    </Text>
-                  </View>
-
-                  <View style={styles.deviceInfo}>
-                    <Text
-                      style={styles.deviceName}
-                    >
-                      {device.name}
-                    </Text>
-
-                    <Text
-                      style={styles.deviceType}
-                    >
-                      {getDeviceTypeName(
-                        device.type
-                      )}
-                    </Text>
-
-                    <View
-                      style={
-                        styles.deviceStatusRow
-                      }
-                    >
-                      <View
-                        style={[
-                          styles.statusDot,
-                          getStatusStyle(
-                            device.status
-                          ),
-                        ]}
-                      />
-
-                      <Text
-                        style={
-                          styles.deviceStatus
-                        }
-                      >
-                        {getStatusText(
-                          device.status
-                        )}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <Text style={styles.arrow}>
-                    ›
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+          {pet.breed && (
+            <InfoRow
+              label="Raça"
+              value={pet.breed}
+            />
           )}
 
-        {/* Nenhum dispositivo */}
+          {pet.weight && (
+            <InfoRow
+              label="Peso"
+              value={`${pet.weight} kg`}
+            />
+          )}
+        </View>
 
-        {!loading &&
-          devices.length === 0 && (
-            <View style={styles.emptyContainer}>
-              <View style={styles.emptyIcon}>
-                <Text style={styles.emptyEmoji}>
-                  📡
-                </Text>
-              </View>
+        <View style={styles.petActions}>
+          <Pressable
+            style={styles.deleteButton}
+            onPress={handleDeletePet}
+          >
+            <Text style={styles.deleteButtonText}>
+              Excluir pet
+            </Text>
+          </Pressable>
+        </View>
 
-              <Text style={styles.emptyTitle}>
+        {/* ================================================== */}
+        {/* DISPOSITIVOS */}
+        {/* ================================================== */}
+
+        <View style={styles.card}>
+          <View
+            style={styles.sectionHeader}
+          >
+            <View>
+              <Text
+                style={styles.sectionTitle}
+              >
+                Dispositivos
+              </Text>
+
+              <Text
+                style={styles.sectionSubtitle}
+              >
+                Equipamentos associados a{" "}
+                {pet.name}
+              </Text>
+            </View>
+
+            <Pressable
+              style={
+                styles.addSmallButton
+              }
+              onPress={
+                handleAddDevice
+              }
+            >
+              <Text
+                style={
+                  styles.addSmallButtonText
+                }
+              >
+                +
+              </Text>
+            </Pressable>
+          </View>
+
+          {devices.length === 0 ? (
+            <View
+              style={styles.emptyState}
+            >
+              <Text
+                style={styles.emptyIcon}
+              >
+                ⚙️
+              </Text>
+
+              <Text
+                style={styles.emptyTitle}
+              >
                 Nenhum dispositivo
               </Text>
 
-              <Text style={styles.emptyText}>
+              <Text
+                style={
+                  styles.emptyDescription
+                }
+              >
                 Adicione um comedouro ou
-                bebedouro para começar a
-                controlar os equipamentos
-                deste pet.
+                bebedouro para este gato.
               </Text>
+
+              <Pressable
+                style={styles.button}
+                onPress={
+                  handleAddDevice
+                }
+              >
+                <Text
+                  style={
+                    styles.buttonText
+                  }
+                >
+                  Adicionar dispositivo
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View
+              style={
+                styles.devicesContainer
+              }
+            >
+              {devices.map(
+                (device) => (
+                  <Pressable
+                    key={device.id}
+                    style={({ pressed }) => [
+                      styles.deviceCard,
+                      pressed &&
+                        styles.deviceCardPressed,
+                    ]}
+                    onPress={() =>
+                      handleDevicePress(
+                        device
+                      )
+                    }
+                  >
+                    <View
+                      style={
+                        styles.deviceIcon
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.deviceIconText
+                        }
+                      >
+                        {device.type ===
+                        "feeder"
+                          ? "🍽️"
+                          : "💧"}
+                      </Text>
+                    </View>
+
+                    <View
+                      style={
+                        styles.deviceInfo
+                      }
+                    >
+                      <Text
+                        style={
+                          styles.deviceName
+                        }
+                      >
+                        {device.name}
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.deviceType
+                        }
+                      >
+                        {device.type ===
+                        "feeder"
+                          ? "Comedouro"
+                          : "Bebedouro"}
+                      </Text>
+
+                      <Text
+                        style={
+                          styles.deviceIdentifier
+                        }
+                      >
+                        {device.identifier}
+                      </Text>
+
+                      <View
+                        style={
+                          styles.deviceStatusRow
+                        }
+                      >
+                        <View
+                          style={[
+                            styles.statusDot,
+                            device.status ===
+                              "online"
+                              ? styles.statusOnline
+                              : device.status ===
+                                "pending"
+                              ? styles.statusPending
+                              : styles.statusOffline,
+                          ]}
+                        />
+
+                        <Text
+                          style={
+                            styles.deviceStatusText
+                          }
+                        >
+                          {device.status ===
+                          "online"
+                            ? "Online"
+                            : device.status ===
+                              "pending"
+                            ? "Pendente"
+                            : "Offline"}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <Text
+                      style={
+                        styles.chevron
+                      }
+                    >
+                      ›
+                    </Text>
+                  </Pressable>
+                )
+              )}
             </View>
           )}
-
-        {/* Adicionar dispositivo */}
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.addButton,
-            pressed &&
-              styles.addButtonPressed,
-          ]}
-          onPress={() =>
-            router.push({
-              pathname: "/device/new",
-              params: {
-                petId: pet.id,
-              },
-            })
-          }
-        >
-          <View style={styles.plusCircle}>
-            <Text style={styles.plus}>
-              +
-            </Text>
-          </View>
-
-          <Text style={styles.addButtonText}>
-            Adicionar novo dispositivo
-          </Text>
-        </Pressable>
-
-        {/* Informações do pet */}
-
-        <View style={styles.infoSection}>
-          <Text style={styles.sectionTitle}>
-            Informações do pet
-          </Text>
-
-          <View style={styles.infoCard}>
-            <InfoRow
-              label="Nome"
-              value={pet.name}
-            />
-
-            <InfoRow
-              label="Idade"
-              value={`${pet.age} anos`}
-            />
-
-            <InfoRow
-              label="Peso"
-              value={`${pet.weight.toFixed(
-                1
-              )} kg`}
-            />
-
-            <InfoRow
-              label="Raça"
-              value={
-                pet.breed ||
-                "Não informado"
-              }
-            />
-
-            {pet.sex && (
-              <InfoRow
-                label="Sexo"
-                value={pet.sex}
-              />
-            )}
-
-            {pet.color && (
-              <InfoRow
-                label="Cor / Pelagem"
-                value={pet.color}
-              />
-            )}
-
-            {pet.foodType && (
-              <InfoRow
-                label="Alimentação"
-                value={pet.foodType}
-              />
-            )}
-          </View>
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
 
-/*
- * Linha de informação do pet
- */
+// ============================================================
+// INFO ROW
+// ============================================================
 
 function InfoRow({
   label,
@@ -468,177 +594,189 @@ function InfoRow({
   value: string;
 }) {
   return (
-    <View style={styles.infoRow}>
-      <Text style={styles.infoLabel}>
+    <View
+      style={styles.infoRow}
+    >
+      <Text
+        style={styles.infoLabel}
+      >
         {label}
       </Text>
 
-      <Text style={styles.infoValue}>
+      <Text
+        style={styles.infoValue}
+      >
         {value}
       </Text>
     </View>
   );
 }
 
+// ============================================================
+// ESTILOS
+// ============================================================
+
 const styles = StyleSheet.create({
-  container: {
+  safeArea: {
     flex: 1,
-    backgroundColor: "#F7F7F5",
+    backgroundColor: "#f5f5f5",
   },
 
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
+  container: {
+    padding: 20,
     paddingBottom: 40,
   },
 
-  header: {
-    flexDirection: "row",
+  center: {
+    flex: 1,
     alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 24,
-  },
-
-  backButtonCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "#FFFFFF",
     justifyContent: "center",
-    alignItems: "center",
   },
 
-  backIcon: {
-    fontSize: 32,
-    color: "#333",
-    marginTop: -3,
-  },
-
-  headerTitle: {
-    fontSize: 19,
-    fontWeight: "700",
-    color: "#222",
-  },
-
-  headerSpacer: {
-    width: 42,
+  backText: {
+    fontSize: 16,
+    color: "#555555",
+    marginBottom: 20,
   },
 
   petHeader: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 18,
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 30,
+    marginBottom: 20,
   },
 
   petAvatar: {
-    width: 82,
-    height: 82,
-    borderRadius: 25,
-    backgroundColor: "#EEEAE3",
-    justifyContent: "center",
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: "#ffffff",
     alignItems: "center",
+    justifyContent: "center",
     marginRight: 16,
+    elevation: 2,
   },
 
-  petEmoji: {
-    fontSize: 43,
+  petAvatarText: {
+    fontSize: 36,
   },
 
-  petInfo: {
+  petHeaderInfo: {
     flex: 1,
   },
 
   petName: {
-    fontSize: 23,
+    fontSize: 28,
     fontWeight: "700",
-    color: "#222",
-    marginBottom: 4,
-  },
-
-  petDetails: {
-    fontSize: 14,
-    color: "#777",
-    marginBottom: 5,
+    color: "#222222",
   },
 
   petBreed: {
-    fontSize: 13,
-    color: "#999",
+    fontSize: 15,
+    color: "#666666",
+    marginTop: 4,
+  },
+
+  petWeight: {
+    fontSize: 14,
+    color: "#777777",
+    marginTop: 3,
+  },
+
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 16,
+    padding: 18,
+    marginBottom: 16,
+    elevation: 2,
   },
 
   sectionHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 14,
   },
 
   sectionTitle: {
-    fontSize: 19,
+    fontSize: 18,
     fontWeight: "700",
-    color: "#222",
+    color: "#222222",
   },
 
   sectionSubtitle: {
-    fontSize: 12,
-    color: "#888",
+    fontSize: 13,
+    color: "#777777",
     marginTop: 4,
   },
 
-  loadingScreen: {
-    flex: 1,
-    justifyContent: "center",
+  addSmallButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#222222",
     alignItems: "center",
+    justifyContent: "center",
   },
 
-  loadingScreenText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: "#888",
+  addSmallButtonText: {
+    color: "#ffffff",
+    fontSize: 26,
+    lineHeight: 28,
+    fontWeight: "400",
   },
 
-  loadingContainer: {
-    height: 100,
-    justifyContent: "center",
-    alignItems: "center",
-    flexDirection: "row",
+  infoRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: "#eeeeee",
+    paddingVertical: 10,
+  },
+
+  infoLabel: {
+    fontSize: 12,
+    color: "#888888",
+    marginBottom: 3,
+  },
+
+  infoValue: {
+    fontSize: 15,
+    color: "#222222",
+  },
+
+  devicesContainer: {
     gap: 10,
   },
 
-  loadingText: {
-    fontSize: 13,
-    color: "#888",
-  },
-
-  deviceList: {
-    gap: 12,
-  },
-
   deviceCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    padding: 16,
     flexDirection: "row",
     alignItems: "center",
+    backgroundColor: "#fafafa",
+    borderWidth: 1,
+    borderColor: "#eeeeee",
+    borderRadius: 14,
+    padding: 14,
   },
 
   deviceCardPressed: {
-    opacity: 0.75,
-    transform: [{ scale: 0.98 }],
+    opacity: 0.65,
+    transform: [
+      {
+        scale: 0.99,
+      },
+    ],
   },
 
   deviceIcon: {
-    width: 58,
-    height: 58,
-    borderRadius: 19,
-    backgroundColor: "#F0ECE5",
-    justifyContent: "center",
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: "#ffffff",
     alignItems: "center",
-    marginRight: 14,
+    justifyContent: "center",
+    marginRight: 12,
   },
 
-  deviceEmoji: {
-    fontSize: 28,
+  deviceIconText: {
+    fontSize: 26,
   },
 
   deviceInfo: {
@@ -648,189 +786,119 @@ const styles = StyleSheet.create({
   deviceName: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#222",
-    marginBottom: 3,
+    color: "#222222",
   },
 
   deviceType: {
-    fontSize: 12,
-    color: "#888",
-    marginBottom: 7,
+    fontSize: 13,
+    color: "#666666",
+    marginTop: 2,
+  },
+
+  deviceIdentifier: {
+    fontSize: 11,
+    color: "#999999",
+    marginTop: 4,
   },
 
   deviceStatusRow: {
     flexDirection: "row",
     alignItems: "center",
+    marginTop: 7,
   },
 
   statusDot: {
-    width: 7,
-    height: 7,
+    width: 8,
+    height: 8,
     borderRadius: 4,
     marginRight: 6,
   },
 
   statusOnline: {
-    backgroundColor: "#55A66A",
+    backgroundColor: "#28a745",
   },
 
   statusOffline: {
-    backgroundColor: "#C96A5A",
+    backgroundColor: "#dc3545",
   },
 
   statusPending: {
-    backgroundColor: "#C89D4B",
+    backgroundColor: "#d99a00",
   },
 
-  deviceStatus: {
-    fontSize: 11,
-    color: "#777",
+  deviceStatusText: {
+    fontSize: 12,
+    color: "#666666",
   },
 
-  arrow: {
-    fontSize: 28,
-    color: "#B0B0B0",
+  chevron: {
+    fontSize: 30,
+    color: "#aaaaaa",
     marginLeft: 8,
   },
 
-  emptyContainer: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    paddingHorizontal: 25,
-    paddingVertical: 28,
+  emptyState: {
     alignItems: "center",
+    paddingVertical: 24,
   },
 
   emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: "#F0ECE5",
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-
-  emptyEmoji: {
-    fontSize: 27,
+    fontSize: 34,
+    marginBottom: 8,
   },
 
   emptyTitle: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#333",
-    marginBottom: 6,
+    color: "#333333",
   },
 
-  emptyText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: "#888",
+  emptyDescription: {
+    fontSize: 13,
+    color: "#777777",
     textAlign: "center",
+    lineHeight: 19,
+    marginTop: 6,
+    marginBottom: 16,
   },
 
-  addButton: {
-    marginTop: 14,
-    height: 60,
-    borderRadius: 19,
-    borderWidth: 1.5,
-    borderColor: "#DDD8CF",
-    borderStyle: "dashed",
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
+  button: {
+    backgroundColor: "#222222",
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 13,
   },
 
-  addButtonPressed: {
-    opacity: 0.6,
-  },
-
-  plusCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: "#2F2F2F",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-
-  plus: {
-    color: "#FFFFFF",
-    fontSize: 22,
-    fontWeight: "300",
-    lineHeight: 25,
-  },
-
-  addButtonText: {
-    fontSize: 14,
+  buttonText: {
+    color: "#ffffff",
+    fontSize: 15,
     fontWeight: "600",
-    color: "#333",
-  },
-
-  infoSection: {
-    marginTop: 32,
-  },
-
-  infoCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    marginTop: 12,
-  },
-
-  infoRow: {
-    minHeight: 52,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    borderBottomWidth: 1,
-    borderBottomColor: "#F0EEEA",
-  },
-
-  infoLabel: {
-    fontSize: 13,
-    color: "#888",
-  },
-
-  infoValue: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "#333",
-    maxWidth: "60%",
-    textAlign: "right",
-  },
-
-  errorContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 30,
   },
 
   errorTitle: {
     fontSize: 20,
     fontWeight: "700",
-    color: "#333",
-    marginBottom: 10,
+    color: "#222222",
+    marginBottom: 16,
   },
+  petActions: {
+  marginTop: 16,
+  marginBottom: 24,
+},
 
-  errorText: {
-    fontSize: 14,
-    color: "#888",
-    textAlign: "center",
-    marginBottom: 20,
-  },
+deleteButton: {
+  minHeight: 48,
+  borderRadius: 14,
+  borderWidth: 1,
+  borderColor: "#C96A5A",
+  alignItems: "center",
+  justifyContent: "center",
+  paddingHorizontal: 16,
+},
 
-  backButton: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: "#2F2F2F",
-  },
-
-  backButtonText: {
-    color: "#FFFFFF",
-    fontWeight: "600",
-  },
+deleteButtonText: {
+  color: "#C96A5A",
+  fontSize: 15,
+  fontWeight: "700",
+},
 });
